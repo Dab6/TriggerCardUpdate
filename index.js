@@ -27,7 +27,7 @@ const getNewToken = async () => {
   console.log('Authorize this app by visiting this url:', authUrl);
 
   // After you obtain the code, set it here
-  const code = 'YOUR_AUTH_CODE';
+  const code = 'ya29.a0AcM612ygVu82c5LIkg4okmTh2pgKvb5xZkvGAlYGxrDi8HY7WyEHE4ZumdosE3qJEBsCq5wP26mgTrjawGIy1Ww_WBccQ7pIbYWN2dyMdTRmQ2TNTOF6PqMUqGqWD-AKvCe77zhteDoOy-QAyWVzBaTMSrpeK01CjypMpT_5aCgYKAaASARMSFQHGX2MiKzbgcNdde903f6zZODMVwQ0175';
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
 };
