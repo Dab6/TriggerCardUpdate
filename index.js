@@ -42,7 +42,7 @@ const triggerMakeScenario = async () => {
 // Function to check for new form responses
 const checkForNewResponses = async () => {
   try {
-    const forms = google.forms_v1({ auth: oauth2Client });
+    const forms = google.forms({ version: 'v1', auth: oauth2Client });
     const response = await forms.forms.responses.list({
       formId: googleFormId
     });
@@ -63,4 +63,3 @@ setInterval(checkForNewResponses, 60000); // 60,000ms = 1 minute
 app.listen(3000, () => {
   console.log('Server running on port 3000');
 });
-
