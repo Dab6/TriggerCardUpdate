@@ -10,6 +10,8 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI;
 const googleFormId = process.env.GOOGLE_FORM_ID;
+const accessToken = process.env.YOUR_ACCESS_TOKEN;
+const refreshToken = process.env.YOUR_REFRESH_TOKEN;
 
 // Set up Google OAuth2 client
 const oauth2Client = new google.auth.OAuth2(
@@ -18,23 +20,9 @@ const oauth2Client = new google.auth.OAuth2(
   googleRedirectUri
 );
 
-// Function to get a new token and set credentials
-const getNewToken = async () => {
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/forms.responses.readonly']
-  });
-  console.log('Authorize this app by visiting this url:', authUrl);
-
-  // After you obtain the code, set it here
-  const code = 'ya29.a0AcM612ygVu82c5LIkg4okmTh2pgKvb5xZkvGAlYGxrDi8HY7WyEHE4ZumdosE3qJEBsCq5wP26mgTrjawGIy1Ww_WBccQ7pIbYWN2dyMdTRmQ2TNTOF6PqMUqGqWD-AKvCe77zhteDoOy-QAyWVzBaTMSrpeK01CjypMpT_5aCgYKAaASARMSFQHGX2MiKzbgcNdde903f6zZODMVwQ0175';
-  const { tokens } = await oauth2Client.getToken(code);
-  oauth2Client.setCredentials(tokens);
-};
-
-// Call getNewToken and set credentials
-getNewToken().then(() => {
-  console.log('Google OAuth2 client authorized successfully');
+oauth2Client.setCredentials({
+  access_token: accessToken,
+  refresh_token: refreshToken
 });
 
 // Function to trigger Make.com scenario
