@@ -1,9 +1,9 @@
-const {google} = require('googleapis');
 const axios = require('axios');
+const { google } = require('googleapis');
 const express = require('express');
 const app = express();
 
-// Your environment variables
+// Environment variables
 const makeScenarioUrl = process.env.MAKE_SCENARIO_URL;
 const makeAccessToken = process.env.MAKE_ACCESS_TOKEN;
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -42,7 +42,7 @@ const triggerMakeScenario = async () => {
 // Function to check for new form responses
 const checkForNewResponses = async () => {
   try {
-    const forms = google.forms({ version: 'v1', auth: oauth2Client });
+    const forms = google.forms_v1({ auth: oauth2Client });
     const response = await forms.forms.responses.list({
       formId: googleFormId
     });
@@ -63,3 +63,4 @@ setInterval(checkForNewResponses, 60000); // 60,000ms = 1 minute
 app.listen(3000, () => {
   console.log('Server running on port 3000');
 });
+
