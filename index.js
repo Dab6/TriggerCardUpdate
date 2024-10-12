@@ -1,9 +1,9 @@
+const {google} = require('googleapis');
 const axios = require('axios');
-const { google } = require('googleapis');
 const express = require('express');
 const app = express();
 
-// Environment variables
+// Your environment variables
 const makeScenarioUrl = process.env.MAKE_SCENARIO_URL;
 const makeAccessToken = process.env.MAKE_ACCESS_TOKEN;
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
