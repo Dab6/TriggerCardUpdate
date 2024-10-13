@@ -1,65 +1,88 @@
-const axios = require('axios');
-const { google } = require('googleapis');
 const express = require('express');
+const axios = require('axios');
 const app = express();
+const port = process.env.PORT || 3000; // Use the environment PORT if available
 
-// Environment variables
-const makeScenarioUrl = process.env.MAKE_SCENARIO_URL;
-const makeAccessToken = process.env.MAKE_ACCESS_TOKEN;
-const googleClientId = process.env.GOOGLE_CLIENT_ID;
-const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
-const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI;
-const googleFormId = process.env.GOOGLE_FORM_ID;
-const accessToken = process.env.YOUR_ACCESS_TOKEN;
-const refreshToken = process.env.YOUR_REFRESH_TOKEN;
+const loyverseApiKey = process.env.LOYVERSE_API_KEY
+const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL
 
-// Set up Google OAuth2 client
-const oauth2Client = new google.auth.OAuth2(
-  googleClientId,
-  googleClientSecret,
-  googleRedirectUri
-);
+// Memory store for processed receipt IDs
+const processedReceipts = new Set();
 
-oauth2Client.setCredentials({
-  access_token: accessToken,
-  refresh_token: refreshToken
-});
+// Function to fetch and match customer receipts
+async function fetchAndMatchCustomerReceipts() {
+  const customerUrl = "https://api.loyverse.com/v1.0/customers";
+  const receiptUrl = "https://api.loyverse.com/v1.0/receipts";
 
-// Function to trigger Make.com scenario
-const triggerMakeScenario = async () => {
   try {
-    await axios.post(makeScenarioUrl, {}, {
+    // Log step: Fetch the list of customers
+    console.log('Fetching the list of customers...');
+    const customerResponse = await axios.get(customerUrl, {
       headers: {
-        'Authorization': `Bearer ${makeAccessToken}`
+        "Authorization": `Bearer ${loyverseApiKey}`,
+        "Content-Type": "application/json"
       }
     });
-    console.log('Make.com scenario triggered successfully');
-  } catch (error) {
-    console.error('Error triggering Make.com scenario:', error);
-  }
-};
+    const customerData = customerResponse.data;
+    console.log('Customers fetched: ', customerData.customers);
 
-// Function to check for new form responses
-const checkForNewResponses = async () => {
-  try {
-    const forms = google.forms({ version: 'v1', auth: oauth2Client });
-    const response = await forms.forms.responses.list({
-      formId: googleFormId
-    });
-    const formResponses = response.data.responses;
-    if (formResponses && formResponses.length > 0) {
-      // Trigger Make.com scenario if there are new responses
-      await triggerMakeScenario();
+    // Example: Only fetch receipts for the first customer
+    if (customerData && customerData.customers && customerData.customers.length > 0) {
+      const customerId = customerData.customers[0].id; // Use the first customer's ID
+      console.log('Customer ID: ', customerId);
+
+      // Log step: Fetch the receipts for the specific customer
+      console.log('Fetching receipts for customer ID ', customerId, '...');
+      const receiptResponse = await axios.get(`${receiptUrl}?customer_id=${customerId}&limit=1`, {
+        headers: {
+          "Authorization": `Bearer ${loyverseApiKey}`,
+          "Content-Type": "application/json"
+        }
+      });
+      const receiptData = receiptResponse.data;
+      console.log('Filtered Receipt Data: ', receiptData);
+
+      if (receiptData.receipts && receiptData.receipts.length > 0) {
+        const receipt = receiptData.receipts[0];
+        const receiptId = receipt.receipt_number;
+
+        if (!processedReceipts.has(receiptId)) {
+          // Add receipt ID to the processed set to avoid duplicates
+          processedReceipts.add(receiptId);
+
+          // Call Make.com webhook with filtered receipt data
+          await axios.post(makeWebhookUrl, receipt, {
+            headers: {
+              "Content-Type": "application/json"
+            }
+          });
+          console.log('Data sent to Make.com webhook.');
+        } else {
+          console.log('Receipt already processed:', receiptId);
+        }
+      } else {
+        console.log('No receipts found for customer ID:', customerId);
+      }
+    } else {
+      console.log('No customers found.');
     }
   } catch (error) {
-    console.error('Error fetching form responses:', error);
+    console.error('Error fetching data: ', error.message);
   }
-};
+}
 
-// Set interval to check for new responses every minute
-setInterval(checkForNewResponses, 60000); // 60,000ms = 1 minute
+// Root route
+app.get('/', (req, res) => {
+  res.send('Server is running. Use /fetch-receipts to trigger the data fetch.');
+});
 
-// Start the Express server
-app.listen(3000, () => {
-  console.log('Server running on port 3000');
+// Route to trigger the function
+app.get('/fetch-receipts', async (req, res) => {
+  await fetchAndMatchCustomerReceipts();
+  res.send('Customer receipts fetched, filtered, and sent to Make.com webhook.');
+});
+
+// Start the server
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });
