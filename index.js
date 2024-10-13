@@ -1,10 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const app = express();
-const port = process.env.PORT || 3000; // Use the environment PORT if available
+const port = process.env.PORT || 3000;
 
-const loyverseApiKey = process.env.LOYVERSE_API_KEY
-const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL
+const loyverseApiKey = process.env.LOYVERSE_API_KEY;
+const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL;
 
 // Memory store for processed receipt IDs
 const processedReceipts = new Set();
@@ -15,7 +16,6 @@ async function fetchAndMatchCustomerReceipts() {
   const receiptUrl = "https://api.loyverse.com/v1.0/receipts";
 
   try {
-    // Log step: Fetch the list of customers
     console.log('Fetching the list of customers...');
     const customerResponse = await axios.get(customerUrl, {
       headers: {
@@ -26,12 +26,10 @@ async function fetchAndMatchCustomerReceipts() {
     const customerData = customerResponse.data;
     console.log('Customers fetched: ', customerData.customers);
 
-    // Example: Only fetch receipts for the first customer
     if (customerData && customerData.customers && customerData.customers.length > 0) {
       const customerId = customerData.customers[0].id; // Use the first customer's ID
       console.log('Customer ID: ', customerId);
 
-      // Log step: Fetch the receipts for the specific customer
       console.log('Fetching receipts for customer ID ', customerId, '...');
       const receiptResponse = await axios.get(`${receiptUrl}?customer_id=${customerId}&limit=1`, {
         headers: {
@@ -47,10 +45,12 @@ async function fetchAndMatchCustomerReceipts() {
         const receiptId = receipt.receipt_number;
 
         if (!processedReceipts.has(receiptId)) {
-          // Add receipt ID to the processed set to avoid duplicates
           processedReceipts.add(receiptId);
 
-          // Call Make.com webhook with filtered receipt data
+          console.log('Sending data to Make.com webhook...');
+          console.log('Webhook URL: ', makeWebhookUrl);
+          console.log('Payload: ', JSON.stringify(receipt));
+
           await axios.post(makeWebhookUrl, receipt, {
             headers: {
               "Content-Type": "application/json"
@@ -68,6 +68,7 @@ async function fetchAndMatchCustomerReceipts() {
     }
   } catch (error) {
     console.error('Error fetching data: ', error.message);
+    console.error('Error details: ', error.response ? error.response.data : 'No additional error information.');
   }
 }
 
