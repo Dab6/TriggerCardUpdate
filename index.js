@@ -1,13 +1,14 @@
 const express = require('express');
 const axios = require('axios');
 const app = express();
-const port = 3000; // Default port
+const port = process.env.PORT || 3000;
 
-const loyverseApiKey = process.env.LOYVERSE_API_KEY;
-const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL;
+const loyverseApiKey = process.env.LOYVERSE_API_KEY; // Use environment variable for Loyverse API key
+const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL; // Use environment variable for Make.com webhook URL
 
 // Memory store for processed receipt IDs
 const processedReceipts = new Set();
+const savedCustomers = new Set(); // To store saved customer IDs
 
 // Function to fetch and match customer receipts
 async function fetchAndMatchCustomerReceipts() {
@@ -24,6 +25,11 @@ async function fetchAndMatchCustomerReceipts() {
     });
     const customerData = customerResponse.data;
     console.log('Customers fetched: ', customerData.customers);
+
+    // Store saved customer IDs
+    customerData.customers.forEach(customer => {
+      savedCustomers.add(customer.id);
+    });
 
     if (customerData && customerData.customers && customerData.customers.length > 0) {
       const customerId = customerData.customers[0].id; // Use the first customer's ID
@@ -42,8 +48,9 @@ async function fetchAndMatchCustomerReceipts() {
       if (receiptData.receipts && receiptData.receipts.length > 0) {
         const receipt = receiptData.receipts[0];
         const receiptId = receipt.receipt_number;
+        const receiptCustomerId = receipt.customer_id;
 
-        if (!processedReceipts.has(receiptId)) {
+        if (!processedReceipts.has(receiptId) && savedCustomers.has(receiptCustomerId)) {
           processedReceipts.add(receiptId);
 
           console.log('Sending data to Make.com webhook...');
@@ -57,7 +64,7 @@ async function fetchAndMatchCustomerReceipts() {
           });
           console.log('Data sent to Make.com webhook.');
         } else {
-          console.log('Receipt already processed:', receiptId);
+          console.log('Receipt already processed or customer not saved:', receiptId);
         }
       } else {
         console.log('No receipts found for customer ID:', customerId);
@@ -76,7 +83,7 @@ app.get('/', (req, res) => {
   res.send('Server is running. Use /fetch-receipts to trigger the data fetch.');
 });
 
-// Route to trigger the function
+// Route to trigger the function manually
 app.get('/fetch-receipts', async (req, res) => {
   await fetchAndMatchCustomerReceipts();
   res.send('Customer receipts fetched, filtered, and sent to Make.com webhook.');
