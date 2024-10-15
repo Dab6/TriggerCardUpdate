@@ -1,22 +1,45 @@
-const express = require('express');
-const axios = require('axios');
-const app = express();
-const port = process.env.PORT || 3000;
+const express = require('express'); // Import express module
+const axios = require('axios'); // Import axios module for HTTP requests
+const app = express(); // Create an Express application
+const port = process.env.PORT || 3000; // Set the port to listen on
+const loyverseApiKey = process.env.LOYVERSE_API_KEY; // API key for Loyverse
+// Array of webhook URLs
+const webhookUrls = [
+  process.env.MAKE_WEBHOOK_URL_1,
+  process.env.MAKE_WEBHOOK_URL_2,
+  process.env.MAKE_WEBHOOK_URL_3,
+  process.env.MAKE_WEBHOOK_URL_4,
+];
+let currentWebhookIndex = 0; // Index to track current webhook
 
-const loyverseApiKey = process.env.LOYVERSE_API_KEY; // Use environment variable for Loyverse API key
-const makeWebhookUrl = process.env.MAKE_WEBHOOK_URL; // Use environment variable for Make.com webhook URL
+const processedReceipts = new Set(); // Set to store processed receipt IDs
+const savedCustomers = new Set(); // Set to store saved customer IDs
 
-// Memory store for processed receipt IDs
-const processedReceipts = new Set();
-const savedCustomers = new Set(); // To store saved customer IDs
+// Function to send data to a webhook
+async function sendToWebhook(receipt, url) {
+  try {
+    const response = await axios.post(url, receipt, {
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+    // Check if the response status is 200 and body is "Accepted"
+    if (response.status === 200 && response.data === "Accepted") {
+      return true; // Successful response
+    } else {
+      throw new Error('Non-accepted response'); // If response is not "Accepted"
+    }
+  } catch (error) {
+    console.error(`Webhook at ${url} failed, trying next webhook.`);
+    return false; // Failed response
+  }
+}
 
 // Function to fetch and match customer receipts
 async function fetchAndMatchCustomerReceipts() {
-  const customerUrl = "https://api.loyverse.com/v1.0/customers";
-  const receiptUrl = "https://api.loyverse.com/v1.0/receipts";
-
+  const customerUrl = "https://api.loyverse.com/v1.0/customers"; // Loyverse API URL for customers
+  const receiptUrl = "https://api.loyverse.com/v1.0/receipts"; // Loyverse API URL for receipts
   try {
-    console.log('Fetching the list of customers...');
     const customerResponse = await axios.get(customerUrl, {
       headers: {
         "Authorization": `Bearer ${loyverseApiKey}`,
@@ -24,18 +47,14 @@ async function fetchAndMatchCustomerReceipts() {
       }
     });
     const customerData = customerResponse.data;
-    console.log('Customers fetched: ', customerData.customers);
 
-    // Store saved customer IDs
+    // Store customer IDs
     customerData.customers.forEach(customer => {
       savedCustomers.add(customer.id);
     });
 
     if (customerData && customerData.customers && customerData.customers.length > 0) {
-      const customerId = customerData.customers[0].id; // Use the first customer's ID
-      console.log('Customer ID: ', customerId);
-
-      console.log('Fetching receipts for customer ID ', customerId, '...');
+      const customerId = customerData.customers[0].id; // Get the first customer's ID
       const receiptResponse = await axios.get(`${receiptUrl}?customer_id=${customerId}&limit=1`, {
         headers: {
           "Authorization": `Bearer ${loyverseApiKey}`,
@@ -43,26 +62,28 @@ async function fetchAndMatchCustomerReceipts() {
         }
       });
       const receiptData = receiptResponse.data;
-      console.log('Filtered Receipt Data: ', receiptData);
 
       if (receiptData.receipts && receiptData.receipts.length > 0) {
-        const receipt = receiptData.receipts[0];
+        const receipt = receiptData.receipts[0]; // Get the first receipt
         const receiptId = receipt.receipt_number;
         const receiptCustomerId = receipt.customer_id;
 
         if (!processedReceipts.has(receiptId) && savedCustomers.has(receiptCustomerId)) {
-          processedReceipts.add(receiptId);
+          processedReceipts.add(receiptId); // Add receipt ID to processed set
 
-          console.log('Sending data to Make.com webhook...');
-          console.log('Webhook URL: ', makeWebhookUrl);
-          console.log('Payload: ', JSON.stringify(receipt));
-
-          await axios.post(makeWebhookUrl, receipt, {
-            headers: {
-              "Content-Type": "application/json"
+          let success = false;
+          while (!success && currentWebhookIndex < webhookUrls.length) {
+            success = await sendToWebhook(receipt, webhookUrls[currentWebhookIndex]); // Try sending to current webhook
+            if (!success) {
+              currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook if failed
             }
-          });
-          console.log('Data sent to Make.com webhook.');
+          }
+
+          if (success) {
+            console.log('Data successfully sent to webhook.');
+          } else {
+            console.error('Failed to send data to any webhook.');
+          }
         } else {
           console.log('Receipt already processed or customer not saved:', receiptId);
         }
