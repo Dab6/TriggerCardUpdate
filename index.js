@@ -1,116 +1,145 @@
-const express = require('express'); // Import express module
-const axios = require('axios'); // Import axios module for HTTP requests
+const express = require('express'); // Import Express framework
+const axios = require('axios'); // Import Axios for making HTTP requests
+
+// Environment variables
+const LOYVERSE_API_TOKEN = process.env.LOYVERSE_API_TOKEN;
+const WEBHOOK_URL_1 = process.env.WEBHOOK_URL_1;
+const WEBHOOK_URL_2 = process.env.WEBHOOK_URL_2;
+const WEBHOOK_URL_3 = process.env.WEBHOOK_URL_3;
+const updatePointsUrl = process.env.UPDATE_POINTS_URL; // URL to update points
+const customerUrl = "https://api.loyverse.com/v1.0/customers"; // Loyverse API URL for customers
+
 const app = express(); // Create an Express application
-const port = process.env.PORT || 3000; // Set the port to listen on
-const loyverseApiKey = process.env.LOYVERSE_API_KEY; // API key for Loyverse
+const PORT = process.env.PORT || 3000;
+
 // Array of webhook URLs
-const webhookUrls = [
-  process.env.MAKE_WEBHOOK_URL_1,
-  process.env.MAKE_WEBHOOK_URL_2,
-  process.env.MAKE_WEBHOOK_URL_3,
-  process.env.MAKE_WEBHOOK_URL_4,
-];
+const webhookUrls = [WEBHOOK_URL_1, WEBHOOK_URL_2, WEBHOOK_URL_3];
 let currentWebhookIndex = 0; // Index to track current webhook
 
-const processedReceipts = new Set(); // Set to store processed receipt IDs
-const savedCustomers = new Set(); // Set to store saved customer IDs
+// Cache to store the last known points of each customer
+let customerPointCache = {};
+let isFirstRun = true; // Flag to indicate the first run
+
+// Function to fetch customers from Loyverse
+async function fetchCustomers() {
+    try {
+        const response = await axios.get(customerUrl, {
+            headers: {
+                'Authorization': `Bearer ${LOYVERSE_API_TOKEN}`
+            }
+        });
+        // Ensure the response data contains customers
+        if (response.data && response.data.customers) {
+            return response.data.customers;
+        } else {
+            console.error('Unexpected response format:', response.data);
+            return [];
+        }
+    } catch (error) {
+        console.error('Error fetching customers from Loyverse:', error.message);
+        return [];
+    }
+}
+
+// Function to fetch card data and map customer codes for a specific customer
+async function fetchAndMapCardForCustomer(customer) {
+    try {
+        const response = await axios.get(updatePointsUrl);
+        const cardData = response.data.data.cards;
+
+        const matchedCard = cardData.find(card => card.barcodeValue === customer.customer_code);
+        if (matchedCard) {
+            customer.match_card_id = matchedCard.id; // Assign match_card_id
+        }
+    } catch (error) {
+        console.error('Error fetching card data: ', error.message);
+    }
+}
+
+// Function to check for point balance changes
+async function checkForPointUpdates() {
+    const customers = await fetchCustomers();
+
+    for (const customer of customers) {
+        const { id, name, total_points, customer_code } = customer;
+
+        // Initialize the cache during the first run without triggering the webhook
+        if (isFirstRun) {
+            customerPointCache[id] = total_points;
+        } else {
+            const previousPoints = customerPointCache[id] || 0;
+
+            // Detect change in total_points
+            if (total_points !== previousPoints) {
+                console.log(`Points update detected for ${name}: ${previousPoints} -> ${total_points}`);
+
+                // Update the cache with the new points
+                customerPointCache[id] = total_points;
+
+                // Fetch card data and map customer code for the updated customer
+                await fetchAndMapCardForCustomer(customer);
+
+                // Trigger the webhook for this customer
+                let success = false;
+                while (!success && currentWebhookIndex < webhookUrls.length) {
+                    success = await sendToWebhook(customer, webhookUrls[currentWebhookIndex]);
+                    if (!success) {
+                        currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook if failed
+                    }
+                }
+                if (success) {
+                    console.log(`Data successfully sent to webhook for ${customer.name}.`);
+                } else {
+                    console.error(`Failed to send data to any webhook for ${customer.name}.`);
+                }
+
+                break; // Only one customer included in the payload at any point
+            }
+        }
+    }
+
+    // After the first run, set the flag to false
+    if (isFirstRun) {
+        console.log('Cache initialized on first run.');
+        isFirstRun = false;
+    }
+}
 
 // Function to send data to a webhook
-async function sendToWebhook(receipt, url) {
-  try {
-    const response = await axios.post(url, receipt, {
-      headers: {
-        "Content-Type": "application/json"
-      }
-    });
-    // Check if the response status is 200 and body is "Accepted"
-    if (response.status === 200 && response.data === "Accepted") {
-      return true; // Successful response
-    } else {
-      throw new Error('Non-accepted response'); // If response is not "Accepted"
-    }
-  } catch (error) {
-    console.error(`Webhook at ${url} failed, trying next webhook.`);
-    return false; // Failed response
-  }
-}
+async function sendToWebhook(customer, url) {
+    try {
+        const response = await axios.post(url, {
+            customer_id: customer.id,
+            name: customer.name,
+            points_balance: customer.total_points,
+            email: customer.email,
+            phone_number: customer.phone_number,
+            total_spent: customer.total_spent,
+            customer_code: customer.customer_code,
+            match_card_id: customer.match_card_id // Added match_card_id
+        }, {
+            headers: { "Content-Type": "application/json" }
+        });
 
-// Function to fetch and match customer receipts
-async function fetchAndMatchCustomerReceipts() {
-  const customerUrl = "https://api.loyverse.com/v1.0/customers"; // Loyverse API URL for customers
-  const receiptUrl = "https://api.loyverse.com/v1.0/receipts"; // Loyverse API URL for receipts
-  try {
-    const customerResponse = await axios.get(customerUrl, {
-      headers: {
-        "Authorization": `Bearer ${loyverseApiKey}`,
-        "Content-Type": "application/json"
-      }
-    });
-    const customerData = customerResponse.data;
-
-    // Store customer IDs
-    customerData.customers.forEach(customer => {
-      savedCustomers.add(customer.id);
-    });
-
-    if (customerData && customerData.customers && customerData.customers.length > 0) {
-      const customerId = customerData.customers[0].id; // Get the first customer's ID
-      const receiptResponse = await axios.get(`${receiptUrl}?customer_id=${customerId}&limit=1`, {
-        headers: {
-          "Authorization": `Bearer ${loyverseApiKey}`,
-          "Content-Type": "application/json"
-        }
-      });
-      const receiptData = receiptResponse.data;
-
-      if (receiptData.receipts && receiptData.receipts.length > 0) {
-        const receipt = receiptData.receipts[0]; // Get the first receipt
-        const receiptId = receipt.receipt_number;
-        const receiptCustomerId = receipt.customer_id;
-
-        if (!processedReceipts.has(receiptId) && savedCustomers.has(receiptCustomerId)) {
-          processedReceipts.add(receiptId); // Add receipt ID to processed set
-
-          let success = false;
-          while (!success && currentWebhookIndex < webhookUrls.length) {
-            success = await sendToWebhook(receipt, webhookUrls[currentWebhookIndex]); // Try sending to current webhook
-            if (!success) {
-              currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook if failed
-            }
-          }
-
-          if (success) {
-            console.log('Data successfully sent to webhook.');
-          } else {
-            console.error('Failed to send data to any webhook.');
-          }
+        if (response.status === 200 && response.data === "Accepted") {
+            return true; // Successful response
         } else {
-          console.log('Receipt already processed or customer not saved:', receiptId);
+            throw new Error('Non-accepted response'); // If response is not "Accepted"
         }
-      } else {
-        console.log('No receipts found for customer ID:', customerId);
-      }
-    } else {
-      console.log('No customers found.');
+    } catch (error) {
+        console.error(`Webhook at ${url} failed, trying next webhook.`);
+        return false; // Failed response
     }
-  } catch (error) {
-    console.error('Error fetching data: ', error.message);
-    console.error('Error details: ', error.response ? error.response.data : 'No additional error information.');
-  }
 }
 
-// Root route
-app.get('/', (req, res) => {
-  res.send('Server is running. Use /fetch-receipts to trigger the data fetch.');
+// Endpoint to manually check for point updates
+app.get('/check-updates', async (req, res) => {
+    await checkForPointUpdates();
+    res.send('Checked for customer point updates.');
 });
 
-// Route to trigger the function manually
-app.get('/fetch-receipts', async (req, res) => {
-  await fetchAndMatchCustomerReceipts();
-  res.send('Customer receipts fetched, filtered, and sent to Make.com webhook.');
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+// Start the Express server
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    console.log('Manual update check endpoint available at /check-updates');
 });
