@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 
 // Array of webhook URLs
 const webhookUrls = [WEBHOOK_URL_1, WEBHOOK_URL_2, WEBHOOK_URL_3];
+const maxRetries = 3; // Maximum number of retries per webhook
 let currentWebhookIndex = 0; // Index to track current webhook
 
 // Cache to store the last known points of each customer
@@ -26,7 +27,8 @@ async function fetchCustomers() {
         const response = await axios.get(customerUrl, {
             headers: {
                 'Authorization': `Bearer ${LOYVERSE_API_TOKEN}`
-            }
+            },
+            timeout: 5000 // Set timeout to handle network delays
         });
         // Ensure the response data contains customers
         if (response.data && response.data.customers) {
@@ -43,22 +45,48 @@ async function fetchCustomers() {
 
 // Function to fetch card data and map customer codes for a specific customer
 async function fetchAndMapCardForCustomer(customer) {
-    try {
-        const response = await axios.get(updatePointsUrl);
-        const cardData = response.data.data.cards;
+    let retries = 0;
+    const maxRetries = 3;
+    let timeout = 10000; // Initial timeout of 10 seconds
 
-        const matchedCard = cardData.find(card => card.barcodeValue === customer.customer_code);
-        if (matchedCard) {
-            customer.match_card_id = matchedCard.id; // Assign match_card_id
+    while (retries < maxRetries) {
+        try {
+            const response = await axios.get(updatePointsUrl, { timeout: timeout });
+            const cardData = response.data.data.cards;
+
+            const matchedCard = cardData.find(card => card.barcodeValue === customer.customer_code);
+            if (matchedCard) {
+                customer.match_card_id = matchedCard.id; // Assign match_card_id
+            }
+            return; // Exit if successful
+        } catch (error) {
+            console.error('Error fetching card data: ', error.message);
+            retries++;
+            timeout *= 2; // Exponentially increase the timeout
+            console.log(`Retrying to fetch card data. Attempt ${retries} with timeout ${timeout} ms`);
         }
-    } catch (error) {
-        console.error('Error fetching card data: ', error.message);
     }
+    console.error('Failed to fetch card data after multiple attempts.');
 }
 
 // Function to check for point balance changes
 async function checkForPointUpdates() {
     const customers = await fetchCustomers();
+    const currentCustomerIds = new Set(customers.map(customer => customer.id));
+
+    // Add new customers to cache without triggering the webhook
+    customers.forEach(customer => {
+        if (!(customer.id in customerPointCache)) {
+            customerPointCache[customer.id] = customer.total_points;
+        }
+    });
+
+    // Remove customers from cache if they no longer exist
+    Object.keys(customerPointCache).forEach(customerId => {
+        if (!currentCustomerIds.has(customerId)) {
+            delete customerPointCache[customerId];
+        }
+    });
 
     for (const customer of customers) {
         const { id, name, total_points, customer_code } = customer;
@@ -81,10 +109,23 @@ async function checkForPointUpdates() {
 
                 // Trigger the webhook for this customer
                 let success = false;
+                let retries = 0;
                 while (!success && currentWebhookIndex < webhookUrls.length) {
-                    success = await sendToWebhook(customer, webhookUrls[currentWebhookIndex]);
+                    const webhookUrl = webhookUrls[currentWebhookIndex];
+                    if (!webhookUrl) {
+                        console.error(`Webhook URL at index ${currentWebhookIndex} is undefined.`);
+                        currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook
+                        continue;
+                    }
+                    success = await sendToWebhook(customer, webhookUrl);
                     if (!success) {
-                        currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook if failed
+                        retries++;
+                        if (retries >= maxRetries) {
+                            currentWebhookIndex = (currentWebhookIndex + 1) % webhookUrls.length; // Move to next webhook if max retries reached
+                            retries = 0; // Reset retries counter for the next webhook
+                        } else {
+                            console.warn(`Retrying webhook for ${customer.name}. Attempt ${retries + 1}`);
+                        }
                     }
                 }
                 if (success) {
@@ -118,7 +159,8 @@ async function sendToWebhook(customer, url) {
             customer_code: customer.customer_code,
             match_card_id: customer.match_card_id // Added match_card_id
         }, {
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
+            timeout: 5000 // Set timeout to handle network delays
         });
 
         if (response.status === 200 && response.data === "Accepted") {
@@ -127,7 +169,7 @@ async function sendToWebhook(customer, url) {
             throw new Error('Non-accepted response'); // If response is not "Accepted"
         }
     } catch (error) {
-        console.error(`Webhook at ${url} failed, trying next webhook.`);
+        console.error(`Webhook at ${url} failed, trying next webhook. Error: ${error.message}`);
         return false; // Failed response
     }
 }
